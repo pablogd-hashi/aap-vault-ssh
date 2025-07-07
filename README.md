@@ -1,379 +1,539 @@
-Here’s the revised version of the README with improved formatting, numbering, and organization:
+# Vault SSH Signing Setup
 
----
+A complete setup script for HashiCorp Vault with SSH certificate signing and AppRole authentication capabilities.
 
-# **Setup Guide: Vault in Minikube, Docker VMs, and SSH Certificates for Ansible Tower (AWX)**
-
-This guide will walk you through the process of setting up **HashiCorp Vault** inside a **Minikube** cluster, creating **Docker containers** as VMs, configuring Vault's **SSH CA** engine, and authenticating with **Ansible Tower (AWX)** using Vault's signed SSH certificates.
-
----
-
-## **Prerequisites**
-
-- **macOS** (or Linux) with **Minikube**, **Docker**, **helm**, and **kubectl** installed.
-- **HashiCorp Vault** installed.
-- **Ansible Tower (AWX)** installed.
-- ***SSH keys for authentication***
-
----
-
-## **Step 1: Set Up Vault in Minikube**
-
-### **1.1 Start Minikube**
-
-Start a Minikube cluster with Docker as the driver:
+## 🚀 Quick Start
 
 ```bash
-minikube start --driver=docker
+# Download and run the setup script
+chmod +x vault-ssh-setup.sh
+./vault-ssh-setup.sh
 ```
 
-### **1.2 Install Vault in Minikube**
+The script will automatically:
+- Install Vault if not present
+- Configure and initialize Vault
+- Set up SSH signing capabilities
+- Create AppRole authentication
+- Test the complete setup
 
-You can use **Helm** to deploy Vault in Minikube.
+## 📋 Prerequisites
 
-1. **Add Vault Helm repository**:
+- **Operating System**: Linux or macOS
+- **Dependencies**: `jq` (auto-installed by script)
+- **Permissions**: sudo access for Vault installation
+- **Network**: Port 8200 available
 
-   ```bash
-   helm repo add hashicorp https://helm.releases.hashicorp.com
-   helm repo update
-   ```
-
-2. **Install Vault**:
-
-   ```bash
-   kubectl create ns vault; helm install vault hashicorp/vault -n vault -f vault_values.yaml    
-   ```
-
-3. **Verify Vault Installation**:
-
-   ```bash
-   kubectl get pods
-   ```
-
-   Vault should be running in your Minikube cluster.
-
-### **1.3 Initialize Vault**
-
-```bash
-kubectl exec -n vault vault-0 -- sh -c "vault operator init -key-shares=1 -key-threshold=1 -format=json" | tee init.json
-```
-
-### **1.4 Unseal Vault**
-
-```bash
-kubectl exec -n vault vault-0 -- sh -c "vault operator unseal $(jq -r .unseal_keys_b64[0] init.json)"  
-```
-
-***NOTE:*** If using zsh, use this command instead:
-
-```bash
-kubectl exec -n vault vault-0 -- sh -c "vault operator unseal $(jq -r '.unseal_keys_b64[0]' init.json)"
-```
-
-### **1.5 Set Vault Environment Variables**
-
-Port forward Vault service:
-
-```bash
-kubectl port-forward -n vault svc/vault 8200:8200
-```
-
-To access the Vault server, export the required environment variables:
-
-```bash
-export VAULT_ADDR=http://localhost:8200
-export VAULT_TOKEN=$(jq -r .root_token init.json)
-```
-
----
-
-## **Step 2: Configure SSH CA in Vault**
-
-### **2.1 Enable SSH Secrets Engine**
-
-Enable the **SSH** secrets engine in Vault:
+## 🏗️ Architecture Overview
 
 ```
-
-vault secrets enable -path=ssh-client-signer ssh
-
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Client App    │    │      Vault      │    │   SSH Server    │
+│                 │    │                 │    │                 │
+│ 1. AppRole Auth ├────► 2. Get Token    │    │                 │
+│ 3. Request Cert │    │ 4. Sign/Issue   │    │                 │
+│ 5. Use Cert     ├────┼─────────────────┼────► 6. Validate     │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
 ```
 
-### **2.2 Configure a Policy**
+## 🔧 What the Script Configures
 
-```
-vault policy write lab-policy - <<EOF
-path "auth/approle/role/lab-approle-role/role-id" {
+### 1. Vault Installation & Configuration
+- **Storage**: File-based storage in `./vault-data`
+- **Listener**: HTTP on `127.0.0.1:8200` (TLS disabled for dev)
+- **UI**: Enabled and accessible
+- **API Address**: `http://127.0.0.1:8200`
+
+### 2. Authentication Methods
+- **AppRole**: Enabled for programmatic access
+- **Role Name**: `ssh-client`
+- **Token TTL**: 1 hour (max 4 hours)
+- **Secret ID TTL**: 24 hours
+
+### 3. SSH Secrets Engine
+- **Mount Path**: `ssh/`
+- **CA Type**: Internal CA with auto-generated signing key
+- **Role Name**: `ssh-signer`
+- **Capabilities**: User and host certificate signing + key pair generation
+
+### 4. Policies
+```hcl
+# SSH signing policy
+path "ssh/sign/ssh-signer" {
+  capabilities = ["create", "update"]
+}
+
+# SSH key pair generation
+path "ssh/issue/ssh-signer" {
+  capabilities = ["create", "update"]
+}
+
+path "ssh/public_key" {
   capabilities = ["read"]
 }
 
-path "auth/approle/role/lab-approle-role/secret-id" {
-  capabilities = ["update"]
+path "ssh/config/ca" {
+  capabilities = ["read"]
 }
-
-path "ssh-client-signer/sign/awx-role" {
-  capabilities = ["create", "read"]
-}
-
-path "ssh-client-signer/issue/awx-role" {
-  capabilities = ["create", "read"]
-}
-EOF
 ```
 
-### **2.3 Configure SSH Engine**
+## 📁 Generated Files
 
-Configure Vault with a CA for signing client keys:
+After successful setup, you'll have:
+
+```
+├── vault-config.hcl          # Vault server configuration
+├── vault-data/               # Vault storage directory
+├── vault.log                 # Vault server logs
+├── vault.pid                 # Process ID file
+├── vault-root-token          # Root token (keep secure!)
+├── approle-role-id           # AppRole Role ID
+└── approle-secret-id         # AppRole Secret ID
+```
+
+## 🔐 SSH Role Configuration
+
+The `ssh-signer` role is configured with:
+
+| Setting | Value | Description |
+|---------|--------|-------------|
+| `key_type` | `ca` | Certificate Authority signing |
+| `algorithm_signer` | `rsa-sha2-256` | Signing algorithm |
+| `allow_user_certificates` | `true` | Can sign user certificates |
+| `allow_host_certificates` | `true` | Can sign host certificates |
+| `allowed_users` | `*` | Any username allowed |
+| `allowed_domains` | `*` | Any domain allowed |
+| `default_user` | `ec2-user` | Default username |
+| `ttl` | `30m` | Default certificate lifetime |
+| `max_ttl` | `1h` | Maximum certificate lifetime |
+
+## 🔑 Usage Examples
+
+### 1. Authenticate with AppRole
 
 ```bash
+export VAULT_ADDR=http://127.0.0.1:8200
 
-vault write ssh-client-signer/config/ca generate_signing_key=true
+# Get credentials from files
+ROLE_ID=$(cat approle-role-id)
+SECRET_ID=$(cat approle-secret-id)
 
+# Login and get client token
+CLIENT_TOKEN=$(vault write -field=token auth/approle/login \
+    role_id=$ROLE_ID \
+    secret_id=$SECRET_ID)
+
+export VAULT_TOKEN=$CLIENT_TOKEN
 ```
 
-### **2.4 Create Signing Role**
-
-Create a named Vault role for signing client keys:
-
-```
-echo '{
-  "algorithm_signer": "rsa-sha2-256",
-  "allow_user_certificates": true,
-  "allowed_users": "*",
-  "allowed_extensions": "permit-pty,permit-port-forwarding",
-  "default_extensions": {
-    "permit-pty": ""
-  },
-  "key_type": "ca",
-  "default_user": "rhel,ubuntu",
-  "ttl": "30m0s"
-}' | vault write ssh-client-signer/roles/awx-role -
-```
-
-***Check all parameters configured for the created role:***
+### 2. Sign an Existing SSH Public Key
 
 ```bash
-vault read ssh-client-signer/roles/awx-role
+# Sign your existing public key
+vault write -field=signed_key ssh/sign/ssh-signer \
+    public_key=@~/.ssh/id_rsa.pub > ~/.ssh/id_rsa-cert.pub
+
+# Use the certificate
+ssh -i ~/.ssh/id_rsa -o CertificateFile=~/.ssh/id_rsa-cert.pub user@server
 ```
 
-### **2.5 Enable appRole Authentication**
+### 3. Generate a Complete SSH Key Pair
 
 ```bash
-vault auth enable approle
+# Generate private key, public key, and signed certificate
+vault write -format=json ssh/issue/ssh-signer \
+    valid_principals=ec2-user,ubuntu \
+    ttl=30m > keypair.json
+
+# Extract components
+jq -r '.data.private_key' keypair.json > private_key
+jq -r '.data.signed_key' keypair.json > certificate
+# Note: signed_key contains the certificate, not just public key
+
+chmod 600 private_key
+
+# Use the generated key pair
+ssh -i private_key -o CertificateFile=certificate user@server
 ```
 
-### **2.6 Create a Role for AWX**
+### 4. Get SSH CA Public Key (for SSH servers)
 
 ```bash
+# Get the CA public key for SSH server configuration
+vault read -field=public_key ssh/config/ca > /etc/ssh/trusted_ca_keys
 
-vault write auth/approle/role/awx-role \
-    token_policies=lab-policy \
-    token_ttl=1h \
-    token_max_ttl=4h \
-    secret_id_ttl=24h \
-    secret_id_num_uses=0
+# Add to SSH server config (/etc/ssh/sshd_config)
+echo "TrustedUserCAKeys /etc/ssh/trusted_ca_keys" >> /etc/ssh/sshd_config
+systemctl reload sshd
 ```
 
----
-### 2.7 Get RoleID and SecretID
+## 🖥️ Target SSH Server Configuration
 
-vault read auth/approle/role/awx-role/role-id | tee role-id.json
+To accept Vault-signed certificates, configure the target SSH servers:
 
-vault write -f auth/approle/role/awx-role/secret-id | tee secret-id.json
+### 1. Get the CA Public Key
 
-## **Step 3: Configure Vault's Kubernetes Auth Method**
-
-This step is required to allow pods within Kubernetes to connect to Vault:
+On your Vault server, extract the CA public key:
 
 ```bash
-vault auth enable -path=kubernetes kubernetes
+export VAULT_ADDR=http://127.0.0.1:8200
+export VAULT_TOKEN=$(cat vault-root-token)
+
+# Save CA public key to a file
+vault read -field=public_key ssh/config/ca > vault_ca.pub
+
+# Copy this key to your target servers
+scp vault_ca.pub target-server:/tmp/vault_ca.pub
 ```
 
-Export Kubernetes host:
+### 2. Configure Target SSH Server
+
+On each target SSH server that should accept Vault certificates:
 
 ```bash
-export K8S_HOST=$(kubectl exec vault-0 -n vault -- sh -c 'echo "https://$KUBERNETES_PORT_443_TCP_ADDR:$KUBERNETES_SERVICE_PORT_HTTPS"')
+# Copy CA public key to SSH directory
+sudo cp /tmp/vault_ca.pub /etc/ssh/trusted_user_ca_keys
+sudo chmod 644 /etc/ssh/trusted_user_ca_keys
+sudo chown root:root /etc/ssh/trusted_user_ca_keys
 ```
 
-Configure Kubernetes authentication:
+### 3. Update SSH Server Configuration
+
+Edit `/etc/ssh/sshd_config` on the target server:
 
 ```bash
-vault write auth/kubernetes/config kubernetes_host="$K8S_HOST"
-vault read auth/kubernetes/config
+sudo vim /etc/ssh/sshd_config
 ```
 
-### **3.1 Write a Policy for Kubernetes**
-
-```
-vault write auth/kubernetes/role/awx-role \
-bound_service_account_names=default \
-bound_service_account_namespaces=default,app,app2,app3 \
-policies=lab-policy \
-audiences=vault \
-ttl=24h
-
-```
-
----
-
-## **Step 4: Create Docker Containers as VMs**
-
-### **4.1 Build Docker Image**
-
-We will create Docker containers that act as virtual machines (VMs) and configure them with the **rhel** user, SSH, and principals.
-
-Build the Docker image:
+Add these lines:
 
 ```bash
-docker build -t awx-ssh .
+# Trust certificates signed by Vault CA
+TrustedUserCAKeys /etc/ssh/trusted_user_ca_keys
+
+# Optional: Require certificate authentication (disable password auth)
+PasswordAuthentication no
+PubkeyAuthentication yes
+AuthorizedKeysFile none
+
+# Optional: Log certificate details
+LogLevel VERBOSE
+
+# Optional: Allow specific principals only
+# AuthorizedPrincipalsFile /etc/ssh/auth_principals/%u
 ```
 
-### **4.2 Create a Docker Network**
-
-Create a custom Docker network for the VMs:
+### 4. Restart SSH Service
 
 ```bash
-docker network create --subnet=192.168.1.0/24 awx-network
+# Test configuration first
+sudo sshd -t
+
+# If test passes, restart SSH
+sudo systemctl restart sshd
+# or
+sudo service ssh restart
 ```
 
-### **4.3 Create Docker Containers**
-
-Create 3 Docker containers that will simulate virtual machines:
+### 5. Verify Configuration
 
 ```bash
-docker run -d --name vm1  --network awx-network -p 12222:22 awx-ssh
-docker run -d --name vm2  --network awx-network -p 12223:22 awx-ssh
-docker run -d --name vm3  --network awx-network -p 12224:22 awx-ssh 
+# Check SSH server status
+sudo systemctl status sshd
+
+# View SSH logs
+sudo tail -f /var/log/auth.log
+# or
+sudo journalctl -u sshd -f
 ```
 
-**NOTE:** If using Minikube, you will need to run a tunnel in a separate terminal:
+## 🧪 Testing SSH Certificate Authentication
+
+### Complete End-to-End Test
+
+1. **Generate certificate on Vault server:**
+```bash
+export VAULT_ADDR=http://127.0.0.1:8200
+ROLE_ID=$(cat approle-role-id)
+SECRET_ID=$(cat approle-secret-id)
+CLIENT_TOKEN=$(vault write -field=token auth/approle/login role_id=$ROLE_ID secret_id=$SECRET_ID)
+export VAULT_TOKEN=$CLIENT_TOKEN
+
+# Generate key pair with certificate
+vault write -format=json ssh/issue/ssh-signer \
+    valid_principals=ec2-user,ubuntu,admin \
+    ttl=5m > test_keypair.json
+
+# Extract private key and certificate
+jq -r '.data.private_key' test_keypair.json > test_private_key
+jq -r '.data.signed_key' test_keypair.json > test_certificate
+chmod 600 test_private_key
+```
+
+2. **Test connection to target server:**
+```bash
+# Connect using certificate
+ssh -i test_private_key -o CertificateFile=test_certificate ec2-user@target-server
+
+# Verify certificate details
+ssh-keygen -L -f test_certificate
+```
+
+3. **Check SSH server logs on target:**
+```bash
+# On target server, watch authentication logs
+sudo tail -f /var/log/auth.log | grep sshd
+```
+
+You should see logs like:
+```
+sshd[1234]: Accepted publickey for ec2-user from 1.2.3.4 port 12345 ssh2: RSA-CERT ID vault-userpass-1234567890
+```
+
+### Alternative: Sign Existing Key
+
+If you prefer to sign an existing key:
 
 ```bash
-minikube tunnel
+# On client machine, generate or use existing key
+ssh-keygen -t rsa -f ~/.ssh/vault_test_key -N ""
+
+# Sign the public key using Vault
+vault write -field=signed_key ssh/sign/ssh-signer \
+    public_key=@~/.ssh/vault_test_key.pub > ~/.ssh/vault_test_key-cert.pub
+
+# Connect using signed certificate
+ssh -i ~/.ssh/vault_test_key -o CertificateFile=~/.ssh/vault_test_key-cert.pub ec2-user@target-server
 ```
 
----
+## 🔧 Advanced SSH Server Configuration
 
-## **Step 5: Test SSH Access**
+### Principal-Based Access Control
 
-### **5.1 Request SSH Keys**
-
-Generate SSH keys signed by Vault:
-
-```
-vault write -format json ssh-client-signer/issue/awx-role valid_principals="rhel,ubuntu" | tee ssh-keys.json
-```
-
-Look into the created certificate to check the principals that have access to:
-
-```
-jq -r .data.signed_key ssh-keys.json | sed '$d' | ssh-keygen -Lf -
-```
-
-Save the private key:
-
-```
-jq -r .data.private_key ssh-keys.json | sed '$d' | tee mypkey
-```
-
-Save the Vault-signed public key:
+Create user-specific principal files:
 
 ```bash
-jq -r .data.signed_key ssh-keys.json | sed '$d' | tee mypkey-cert.pub
+# Create principals directory
+sudo mkdir -p /etc/ssh/auth_principals
+
+# Create principal file for specific user
+echo "admin" | sudo tee /etc/ssh/auth_principals/ec2-user
+echo "developer" | sudo tee /etc/ssh/auth_principals/ubuntu
+
+# Update sshd_config
+echo "AuthorizedPrincipalsFile /etc/ssh/auth_principals/%u" | sudo tee -a /etc/ssh/sshd_config
 ```
 
-Change permissions to both keys:
+### Certificate Validation Options
+
+Add to `/etc/ssh/sshd_config`:
 
 ```bash
-chmod 600 mypkey*
+# Require valid certificate (no fallback to authorized_keys)
+AuthorizedKeysFile none
+
+# Allow both certificates and authorized_keys
+AuthorizedKeysFile /etc/ssh/authorized_keys/%u
+
+# Certificate options
+CertificateFile /etc/ssh/ssh_host_rsa_key-cert.pub
+HostCertificate /etc/ssh/ssh_host_rsa_key-cert.pub
 ```
 
-### **5.2 Copy Vault's Public Key to VMs**
+### Troubleshooting SSH Certificate Issues
 
-Copy the unsigned public key from Vault:
-
+**1. Check certificate validity:**
+```bash
+ssh-keygen -L -f certificate_file
 ```
 
-curl -k -o trusted-user-ca-keys.pem $VAULT_ADDR/v1/ssh-client-signer/public_key
-
+**2. Test SSH connection with verbose output:**
+```bash
+ssh -vvv -i private_key -o CertificateFile=certificate user@server
 ```
 
-Copy the public key to the target VMs:
+**3. Common issues:**
+- **Certificate expired**: Check TTL and regenerate
+- **Principal mismatch**: Ensure certificate principals match server expectations  
+- **CA key mismatch**: Verify target server has correct CA public key
+- **Permission issues**: Check file permissions (600 for private keys, 644 for certificates)
 
-```
-docker cp trusted-user-ca-keys.pem vm1:/etc/ssh/trusted-user-ca-keys.pem
-docker cp trusted-user-ca-keys.pem vm2:/etc/ssh/trusted-user-ca-keys.pem
-docker cp trusted-user-ca-keys.pem vm3:/etc/ssh/trusted-user-ca-keys.pem
+**4. SSH server debug mode:**
+```bash
+# Stop SSH service
+sudo systemctl stop sshd
+
+# Run in debug mode
+sudo /usr/sbin/sshd -D -d
+
+# In another terminal, try to connect
+ssh -i private_key -o CertificateFile=certificate user@localhost
 ```
 
-### **5.3 SSH into the Target Machines**
+## 🛠️ Management Commands
+
+### Vault Server Management
+```bash
+# Check Vault status
+vault status
+
+# View logs
+tail -f vault.log
+
+# Stop Vault
+kill $(cat vault.pid)
+
+# Start Vault (after stopping)
+vault server -config=vault-config.hcl &
+echo $! > vault.pid
+```
+
+### Token Management
+```bash
+# Check token info
+vault token lookup
+
+# Renew token
+vault token renew
+
+# Create new secret ID
+vault write -field=secret_id auth/approle/role/ssh-client/secret-id
+```
+
+## 🔍 Troubleshooting
+
+### Common Issues
+
+**1. Vault fails to start**
+```bash
+# Check logs
+cat vault.log
+
+# Verify port availability
+lsof -i :8200
+
+# Check permissions
+ls -la vault-data/
+```
+
+**2. AppRole authentication fails**
+```bash
+# Verify credentials
+vault read auth/approle/role/ssh-client
+cat approle-role-id
+cat approle-secret-id
+
+# Check if auth method is enabled
+vault auth list
+```
+
+**3. SSH signing fails**
+```bash
+# Check SSH engine status
+vault secrets list
+
+# Verify role configuration
+vault read ssh/roles/ssh-signer
+
+# Check policy permissions
+vault policy read ssh-signer
+```
+
+**4. Certificate validation issues**
+```bash
+# Verify certificate format
+ssh-keygen -L -f certificate_file
+
+# Check CA public key
+vault read -field=public_key ssh/config/ca
+
+# Validate certificate against CA
+ssh-keygen -Y verify -f ca_public_key -I principal -n namespace -s signature
+```
+
+### Debug Mode
+
+Enable debug logging by modifying `vault-config.hcl`:
+
+```hcl
+log_level = "debug"
+```
+
+Then restart Vault and check `vault.log` for detailed information.
+
+## 🔒 Security Considerations
+
+### Development vs Production
+
+This setup is designed for **development and testing**. For production:
+
+1. **Enable TLS**: Configure proper SSL certificates
+2. **Use external storage**: PostgreSQL, Consul, etc.
+3. **Enable audit logging**: Track all operations
+4. **Implement proper secret management**: Don't store tokens in files
+5. **Network security**: Firewall rules, VPN access
+6. **Regular token rotation**: Automate token renewal
+7. **Principle of least privilege**: More restrictive policies
+
+### Security Best Practices
 
 ```bash
-ssh -i mypkey -i mypkey-cert.pub rhel@localhost -p 12222  
-ssh -i mypkey -i mypkey-cert.pub rhel@localhost -p 12223  
-ssh -i mypkey -i mypkey-cert.pub rhel@localhost -p 12224  
+# 1. Secure file permissions
+chmod 600 vault-root-token approle-*
+chown vault:vault vault-data/
+
+# 2. Regular token rotation
+vault write -f auth/approle/role/ssh-client/secret-id
+
+# 3. Monitor access
+vault audit enable file file_path=vault-audit.log
+
+# 4. Use short-lived certificates
+vault write ssh/roles/ssh-signer ttl=5m max_ttl=15m
 ```
 
----
+## 🧪 Testing Your Setup
 
-## **Step 6: Configure Ansible Tower (AWX)**
+### Manual Verification
 
-### **6.1 Install Ansible Tower (AWX)**
+```bash
+# 1. Test AppRole login
+ROLE_ID=$(cat approle-role-id)
+SECRET_ID=$(cat approle-secret-id)
+TOKEN=$(vault write -field=token auth/approle/login role_id=$ROLE_ID secret_id=$SECRET_ID)
+echo "Token obtained: ${TOKEN:0:10}..."
 
-Follow the [AWX Installation Guide](https://github.com/ansible/awx/blob/devel/docs/installation.md) for official installation instructions.
+# 2. Test SSH signing
+export VAULT_TOKEN=$TOKEN
+ssh-keygen -t rsa -f test_key -N ""
+vault write -field=signed_key ssh/sign/ssh-signer public_key=@test_key.pub > test_cert.pub
+ssh-keygen -L -f test_cert.pub
 
-Alternatively, use the `awx-operator` to deploy AWX in your Kubernetes cluster:
-
-```
-cd awx-operator; make deploy
-```
-
-Wait until the Operator pod is running:
-
-```
-kubectl get pods -n awx
-```
-
-Deploy AWX instance
-
-```
-kubectl apply -k .
+# 3. Test key generation
+vault write -format=json ssh/issue/ssh-signer valid_principals=testuser ttl=5m
 ```
 
-### **6.2 Create a Vault Credential in AWX**
+### Automated Testing
 
-1. Go to the **Credentials** section in AWX.
-2. Create a new **HashiCorp Vault Signed SSH** credential type and enter the Vault server URL and token.
+The setup script includes comprehensive testing that verifies:
+- ✅ Vault installation and startup
+- ✅ Initialization and unsealing
+- ✅ AppRole authentication
+- ✅ SSH certificate signing
+- ✅ SSH key pair generation
+- ✅ Certificate validation
 
-![alt text](images/SSH_Creds_AWX.png)
+## 📚 Additional Resources
 
-3. Save.
-4. Go to the **Credentials** section again and add a new **Machine** type credentials
+- [HashiCorp Vault Documentation](https://www.vaultproject.io/docs)
+- [SSH Secrets Engine Guide](https://www.vaultproject.io/docs/secrets/ssh)
+- [AppRole Authentication](https://www.vaultproject.io/docs/auth/approle)
+- [SSH Certificate Authentication](https://man.openbsd.org/ssh-keygen.1#CERTIFICATES)
 
-![alt text](images/machine_Creds_awx.png)
+## 🤝 Contributing
 
-**username**: Make sure to use a valid username, based on the vaild_principals configured in section 2.4
+Feel free to submit issues and enhancement requests!
 
-**SSH Private Key**: Paste the private key AWX will need to log into the target VMs
+## 📄 License
 
-**Signed SSH Certificate**: Click on the Key icon on the right side of the screen:
-
-![alt text](images/configure_ssh_certificate.png)
-
-You should get another window like this:
-
-![alt text](images/external_secrets_AWX.png)
-
-
-Fill the details with:
-
-**unsigned Public Key**: Public key of the private key provided in previous step
-
-**path-to-secret**: Path where you enabled SSH in Vault
-
-**role-name**: Role to allow AWX to request a signed key
-
-**valid-principals**: users allow to authenticate in the target VM
-
-
-
+This project is licensed under the MIT License.
