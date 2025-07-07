@@ -1,0 +1,42 @@
+---
+- name: Retrieve SSH key pair from Vault
+  hosts: localhost
+  gather_facts: no
+  tasks:
+    - name: Retrieve SSH key pair from Vault using API
+      uri:
+        url: "http://127.0.0.1:8200/v1/ssh-client-signer/issue/awx-role"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ lookup('env', 'VAULT_TOKEN') }}"
+        body: "{}"  # Empty body because Vault will generate the key pair
+        body_format: json
+        return_content: yes
+      register: ssh_key_response
+
+    - name: Show full response from Vault
+      debug:
+        var: ssh_key_response
+
+    # - name: Set SSH private and public keys as facts
+    #   set_fact:
+    #     ssh_private_key: "{{ ssh_key_response.json.data.signed_key.private_key }}"
+    #     ssh_public_key: "{{ ssh_key_response.json.data.signed_key.public_key }}"
+
+    # - name: Save SSH private key to file
+    #   copy:
+    #     content: "{{ ssh_private_key }}"
+    #     dest: "./ssh_private_key"
+    #     mode: '0600'
+
+    # - name: Save SSH public key to file
+    #   copy:
+    #     content: "{{ ssh_public_key }}"
+    #     dest: "./ssh_public_key"
+    #     mode: '0644'
+
+    # - name: Show SSH keys
+    #   debug:
+    #     msg:
+    #       - "Private Key: {{ ssh_private_key }}"
+    #       - "Public Key: {{ ssh_public_key }}"

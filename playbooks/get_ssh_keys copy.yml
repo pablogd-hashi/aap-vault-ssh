@@ -1,0 +1,93 @@
+---
+- name: Retrieve SSH key pair from Vault and SSH into remote machine
+  hosts: localhost
+  gather_facts: no
+  vars:
+    # Define the root token here
+    root_token: "{{ lookup('env', 'VAULT_TOKEN') }}"  # Replace with your Vault root token
+    # Define the remote machine and user
+    remote_host: "192.168.64.24"
+    remote_user: "ubuntu"
+    private_key_path: "../keys/vault-poc"  # Location to store the private key temporarily
+
+  tasks:
+    # Fetch the role_id dynamically (simulating the normal workflow)
+    - name: Retrieve the role_id from Vault
+      uri:
+        url: "http://127.0.0.1:8200/v1/auth/approle/role/awx-role/role-id"
+        method: GET
+        headers:
+          X-Vault-Token: "{{ lookup('env', 'VAULT_TOKEN') }}"  # Use the current VAULT_TOKEN (if already set)
+        return_content: yes
+      register: role_id_response
+      no_log: false
+
+    - name: Show role_id response
+      debug:
+        var: role_id_response
+
+    # Fetch the secret_id dynamically (simulating the normal workflow)
+    - name: Retrieve the secret_id from Vault
+      uri:
+        url: "http://127.0.0.1:8200/v1/auth/approle/role/awx-role/secret-id"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ lookup('env', 'VAULT_TOKEN') }}"  # Use the current VAULT_TOKEN (if already set)
+        body: "{}"
+        body_format: json
+        return_content: yes
+      register: secret_id_response
+      no_log: false
+
+    - name: Show secret_id response
+      debug:
+        var: secret_id_response
+
+    # Now use the root token to retrieve the SSH key pair
+    - name: Retrieve SSH key pair from Vault using root token
+      uri:
+        url: "http://127.0.0.1:8200/v1/ssh-client-signer/issue/awx-role"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ root_token }}"  # Use the root token here to bypass permissions
+        body: "{}"  # Empty body because Vault will generate the key pair
+        body_format: json
+        return_content: yes
+      register: ssh_key_response
+
+    - name: Show SSH key response
+      debug:
+        var: ssh_key_response
+
+    # Save the private key to a file
+    - name: Save private key to a file
+      copy:
+        content: "{{ ssh_key_response.json.data.private_key }}"
+        dest: "{{ private_key_path }}"
+        mode: '0600'
+
+    # SSH into the remote machine using the private key
+    - name: SSH to remote machine using the private key
+      ansible.builtin.shell:
+        cmd: "hostname"
+      delegate_to: "{{ remote_host }}"
+      vars:
+        ansible_connection: ssh
+        ansible_ssh_private_key_file: "{{ private_key_path }}"
+        ansible_user: "{{ remote_user }}"
+
+    # Optionally, you can perform more commands on the remote machine
+    - name: Run a command on remote machine after SSH
+      ansible.builtin.shell:
+        cmd: "uptime"
+      delegate_to: "{{ remote_host }}"
+      vars:
+        ansible_connection: ssh
+        ansible_ssh_private_key_file: "{{ private_key_path }}"
+        ansible_user: "{{ remote_user }}"
+
+    # Clean up the private key file after SSH
+    - name: Remove private key file
+      file:
+        path: "{{ private_key_path }}"
+        state: absent
