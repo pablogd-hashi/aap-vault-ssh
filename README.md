@@ -77,6 +77,15 @@ path "ssh/config/ca" {
 }
 ```
 
+#### Policy Breakdown
+
+| Path | Capabilities | Description |
+|------|-------------|-------------|
+| `ssh/sign/ssh-signer` | `["create", "update"]` | Sign existing SSH public keys to create certificates |
+| `ssh/issue/ssh-signer` | `["create", "update"]` | Generate complete SSH key pairs with certificates |
+| `ssh/public_key` | `["read"]` | Read the SSH CA public key for server configuration |
+| `ssh/config/ca` | `["read"]` | Read SSH CA configuration and public key details |
+
 ## 📁 Generated Files
 
 After successful setup, you'll have:
