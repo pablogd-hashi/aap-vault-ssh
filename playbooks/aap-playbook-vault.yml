@@ -1,0 +1,36 @@
+---
+- name: Install HashiCorp Vault on RHEL
+  hosts: rhel
+  become: yes
+  gather_facts: yes
+
+  tasks:
+
+    - name: Get required packages
+      ansible.builtin.dnf:
+        name:
+          - yum-utils
+
+    - name: Add HashiCorp repository
+      ansible.builtin.yum_repository:
+        name: hashicorp
+        description: "HashiCorp Stable - $basearch"
+        baseurl: "https://rpm.releases.hashicorp.com/RHEL/$releasever/$basearch/stable"
+        gpgkey: "https://rpm.releases.hashicorp.com/gpg"
+        gpgcheck: true
+        enabled: true
+        state: present
+
+    - name: Install vault
+      ansible.builtin.yum:
+        name:
+          - vault
+
+    - name: Verify vault installation
+      ansible.builtin.command:
+        cmd: vault --version
+      register: vault_version
+
+    - name: Print vault version
+      ansible.builtin.debug:
+        msg: "Vault version: {{ vault_version.stdout }}"
