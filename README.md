@@ -1,6 +1,6 @@
 # Vault SSH Signing Setup
 
-A complete setup script for HashiCorp Vault with SSH certificate signing and AppRole authentication capabilities.
+A complete setup script for HashiCorp Vault with SSH certificate signing and AppRole authentication.
 
 ## 🚀 Quick Start
 
