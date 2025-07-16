@@ -1,6 +1,3 @@
-Here’s the revised version of the README with improved formatting, numbering, and organization:
-
----
 
 # **Setup Guide: Vault in Minikube, Docker VMs, and SSH Certificates for Ansible Tower (AWX)**
 
